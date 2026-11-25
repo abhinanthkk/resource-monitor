@@ -97,6 +97,25 @@ function formatRamMemory(usedKibibytes, totalKibibytes) {
     return formatMemoryPair(usedKibibytes / 1024 / 1024, totalKibibytes / 1024 / 1024);
 }
 
+function formatNetworkSpeed(downloadBytesPerSecond, uploadBytesPerSecond) {
+    const peakSpeed = Math.max(downloadBytesPerSecond, uploadBytesPerSecond);
+    let divisor = 1;
+    let unit = 'B/s';
+
+    if (peakSpeed >= 1_000_000_000) {
+        divisor = 1_000_000_000;
+        unit = 'GB/s';
+    } else if (peakSpeed >= 1_000_000) {
+        divisor = 1_000_000;
+        unit = 'MB/s';
+    } else if (peakSpeed >= 1_000) {
+        divisor = 1_000;
+        unit = 'KB/s';
+    }
+
+    return `${(downloadBytesPerSecond / divisor).toFixed(1)}/${(uploadBytesPerSecond / divisor).toFixed(1)} ${unit}`;
+}
+
 function createMetric(iconName, labelText) {
     const box = new St.BoxLayout({style_class: 'resource-monitor-metric', spacing: 4});
     const icon = new St.Icon({
@@ -203,8 +222,8 @@ export default class ResourceMonitorExtension extends Extension {
         const receivedDelta = Math.max(0, counters.received - previous.received);
         const sentDelta = Math.max(0, counters.sent - previous.sent);
         return {
-            download: receivedDelta / elapsedSeconds / 1_000_000,
-            upload: sentDelta / elapsedSeconds / 1_000_000,
+            download: receivedDelta / elapsedSeconds,
+            upload: sentDelta / elapsedSeconds,
             interface: counters.interface,
         };
     }
@@ -321,7 +340,7 @@ export default class ResourceMonitorExtension extends Extension {
             ? formatRamMemory(memory.used, memory.total)
             : 'unavailable';
         const ramPercent = memory ? Math.round(memory.used / memory.total * 100) : null;
-        const networkText = `${this._network.download.toFixed(1)}/${this._network.upload.toFixed(1)} MB/s`;
+        const networkText = formatNetworkSpeed(this._network.download, this._network.upload);
 
         if (!this._indicator)
             return;

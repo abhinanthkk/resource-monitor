@@ -12,7 +12,7 @@ A lightweight GNOME Shell extension that displays CPU, GPU memory, RAM, and netw
 - Network download/upload speed in MB/s, measured from `/proc/net/dev` on the default route interface when available.
 - Refreshes every two seconds and requires no administrator privileges.
 
-The panel shows CPU as a percentage, GPU and RAM as used/total GB (for example `3.4/4 GB`), and network as download/upload MB/s (for example `1.1/0.5 MB/s`). GPU utilization and the active network interface are shown in the dropdown.
+The panel shows CPU as a percentage, GPU and RAM as used/total GB (for example `3.4/4 GB`), and network as download/upload speed with automatically selected B/s, KB/s, MB/s, or GB/s units (for example `1.1/0.5 MB/s`). Both network directions use the same unit for easy comparison. GPU utilization and the active network interface are shown in the dropdown.
 
 GPU metrics depend on what the installed graphics driver exposes. On NVIDIA systems, `nvidia-smi` must be installed and able to query the GPU. Intel/AMD sysfs metrics are used only when their driver provides the relevant files.
 
