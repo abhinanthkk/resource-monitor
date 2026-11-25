@@ -117,12 +117,14 @@ function formatNetworkSpeed(downloadBytesPerSecond, uploadBytesPerSecond) {
 }
 
 function createMetric(iconName, labelText) {
-    const box = new St.BoxLayout({style_class: 'resource-monitor-metric', spacing: 4});
+    const box = new St.BoxLayout({style_class: 'resource-monitor-metric'});
+    box.set_style('margin-right: 8px;');
     const icon = new St.Icon({
         icon_name: iconName,
         style_class: 'system-status-icon',
         icon_size: 14,
     });
+    icon.set_style('margin-right: 4px;');
     const label = new St.Label({
         text: labelText,
         y_align: Clutter.ActorAlign.CENTER,
@@ -143,7 +145,7 @@ export default class ResourceMonitorExtension extends Extension {
         this._gpu = {summary: '--/-- GB', detail: 'GPU metrics are being detected.'};
 
         this._indicator = new PanelMenu.Button(0.0, 'Resource Monitor', false);
-        this._panelBox = new St.BoxLayout({style_class: 'panel-status-menu-box', spacing: 8});
+        this._panelBox = new St.BoxLayout({style_class: 'panel-status-menu-box'});
         const cpu = createMetric('computer-chip-symbolic', '--%');
         const gpu = createMetric('video-display-symbolic', '--/-- GB');
         const ram = createMetric('drive-harddisk-symbolic', '--/-- GB');
