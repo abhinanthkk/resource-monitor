@@ -1,3 +1,4 @@
+import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import St from 'gi://St';
@@ -49,13 +50,15 @@ function formatMemory(kibibytes) {
 export default class ResourceMonitorExtension extends Extension {
     enable() {
         this._previousCpu = null;
+        this._cpu = null;
+        this._memory = null;
         this._gpuRequestPending = false;
         this._gpu = {summary: 'GPU: checking…', detail: 'GPU metrics are being detected.'};
 
         this._indicator = new PanelMenu.Button(0.0, 'Resource Monitor', false);
         this._panelLabel = new St.Label({
             text: 'CPU --%  GPU --%  RAM --',
-            y_align: 2,
+            y_align: Clutter.ActorAlign.CENTER,
         });
         this._indicator.add_child(this._panelLabel);
 
@@ -200,13 +203,15 @@ export default class ResourceMonitorExtension extends Extension {
     }
 
     _refresh() {
-        const cpu = this._readCpuUsage();
-        const memory = readMemory();
+        this._cpu = this._readCpuUsage();
+        this._memory = readMemory();
         this._readGpu();
-        this._updateLabels(cpu, memory);
+        this._updateLabels();
     }
 
-    _updateLabels(cpu = this._readCpuUsage(), memory = readMemory()) {
+    _updateLabels() {
+        const cpu = this._cpu;
+        const memory = this._memory;
         const cpuText = cpu === null ? '--%' : `${cpu}%`;
         const ramText = memory ? `${formatMemory(memory.used)} / ${formatMemory(memory.total)}` : 'unavailable';
         const ramPercent = memory ? Math.round(memory.used / memory.total * 100) : null;
@@ -233,5 +238,7 @@ export default class ResourceMonitorExtension extends Extension {
         this._gpuMenuItem = null;
         this._ramMenuItem = null;
         this._previousCpu = null;
+        this._cpu = null;
+        this._memory = null;
     }
 }
