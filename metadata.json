@@ -1,0 +1,7 @@
+{
+  "uuid": "resource-monitor@abee",
+  "name": "Resource Monitor",
+  "description": "Display CPU, GPU, and memory usage in the GNOME top bar.",
+  "version": 1,
+  "shell-version": ["50"]
+}
