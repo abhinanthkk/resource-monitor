@@ -1,14 +1,18 @@
 # Resource Monitor
 
-A lightweight GNOME Shell extension that displays CPU, GPU, and RAM usage in the Ubuntu top bar.
+A lightweight GNOME Shell extension that displays CPU, GPU memory, RAM, and network throughput in the Ubuntu top bar.
 
 ## Features
 
+- Icon-led top-bar readings for CPU percentage, GPU memory, RAM usage, and network speed.
 - CPU utilization calculated from `/proc/stat`.
-- RAM utilization calculated from `/proc/meminfo`.
+- RAM used/total calculated from `/proc/meminfo`.
 - NVIDIA GPU utilization and VRAM usage through `nvidia-smi`.
 - Linux DRM sysfs fallback for Intel and AMD drivers that expose utilization metrics.
+- Network download/upload speed in MB/s, measured from `/proc/net/dev` on the default route interface when available.
 - Refreshes every two seconds and requires no administrator privileges.
+
+The panel shows CPU as a percentage, GPU and RAM as used/total GB (for example `3.4/4 GB`), and network as download/upload MB/s (for example `1.1/0.5 MB/s`). GPU utilization and the active network interface are shown in the dropdown.
 
 GPU metrics depend on what the installed graphics driver exposes. On NVIDIA systems, `nvidia-smi` must be installed and able to query the GPU. Intel/AMD sysfs metrics are used only when their driver provides the relevant files.
 

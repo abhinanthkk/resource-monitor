@@ -42,9 +42,75 @@ function readMemory() {
     return {used: total - available, total};
 }
 
-function formatMemory(kibibytes) {
-    const gibibytes = kibibytes / 1024 / 1024;
-    return gibibytes >= 1 ? `${gibibytes.toFixed(1)} GiB` : `${Math.round(kibibytes / 1024)} MiB`;
+function readNetworkCounters() {
+    const contents = readText('/proc/net/dev');
+    if (!contents)
+        return null;
+
+    const interfaces = new Map();
+    for (const line of contents.split('\n')) {
+        const match = line.match(/^\s*([^:]+):\s*(.+)$/);
+        if (!match)
+            continue;
+
+        const fields = match[2].trim().split(/\s+/).map(Number);
+        if (fields.length < 9)
+            continue;
+
+        interfaces.set(match[1].trim(), {received: fields[0], sent: fields[8]});
+    }
+
+    const routeLines = readText('/proc/net/route')?.split('\n').slice(1) ?? [];
+    const defaultRoutes = routeLines
+        .map(line => line.trim().split(/\s+/))
+        .filter(fields => fields.length >= 8 && fields[1] === '00000000' && (parseInt(fields[3], 16) & 1))
+        .sort((left, right) => Number(left[6]) - Number(right[6]));
+
+    const defaultInterface = defaultRoutes.find(route => interfaces.has(route[0]))?.[0];
+    if (defaultInterface)
+        return {interface: defaultInterface, ...interfaces.get(defaultInterface)};
+
+    // A default route may not be present on an offline or IPv6-only host.
+    // In that case, aggregate all non-loopback interfaces.
+    const activeInterfaces = [...interfaces.entries()].filter(([name]) => name !== 'lo');
+    if (activeInterfaces.length === 0)
+        return null;
+
+    return {
+        interface: activeInterfaces.map(([name]) => name).join(', '),
+        received: activeInterfaces.reduce((sum, [, counters]) => sum + counters.received, 0),
+        sent: activeInterfaces.reduce((sum, [, counters]) => sum + counters.sent, 0),
+    };
+}
+
+function formatMemoryPair(usedGibibytes, totalGibibytes) {
+    const used = Number(usedGibibytes.toFixed(1)).toString();
+    const total = Math.ceil(totalGibibytes);
+    return `${used}/${total} GB`;
+}
+
+function formatGpuMemory(usedMebibytes, totalMebibytes) {
+    return formatMemoryPair(usedMebibytes / 1024, totalMebibytes / 1024);
+}
+
+function formatRamMemory(usedKibibytes, totalKibibytes) {
+    return formatMemoryPair(usedKibibytes / 1024 / 1024, totalKibibytes / 1024 / 1024);
+}
+
+function createMetric(iconName, labelText) {
+    const box = new St.BoxLayout({style_class: 'resource-monitor-metric', spacing: 4});
+    const icon = new St.Icon({
+        icon_name: iconName,
+        style_class: 'system-status-icon',
+        icon_size: 14,
+    });
+    const label = new St.Label({
+        text: labelText,
+        y_align: Clutter.ActorAlign.CENTER,
+    });
+    box.add_child(icon);
+    box.add_child(label);
+    return {box, label};
 }
 
 export default class ResourceMonitorExtension extends Extension {
@@ -52,22 +118,35 @@ export default class ResourceMonitorExtension extends Extension {
         this._previousCpu = null;
         this._cpu = null;
         this._memory = null;
+        this._previousNetwork = null;
+        this._network = {download: 0, upload: 0, interface: 'unavailable'};
         this._gpuRequestPending = false;
-        this._gpu = {summary: 'GPU: checking…', detail: 'GPU metrics are being detected.'};
+        this._gpu = {summary: '--/-- GB', detail: 'GPU metrics are being detected.'};
 
         this._indicator = new PanelMenu.Button(0.0, 'Resource Monitor', false);
-        this._panelLabel = new St.Label({
-            text: 'CPU --%  GPU --%  RAM --',
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._indicator.add_child(this._panelLabel);
+        this._panelBox = new St.BoxLayout({style_class: 'panel-status-menu-box', spacing: 8});
+        const cpu = createMetric('computer-chip-symbolic', '--%');
+        const gpu = createMetric('video-display-symbolic', '--/-- GB');
+        const ram = createMetric('drive-harddisk-symbolic', '--/-- GB');
+        const network = createMetric('network-transmit-receive-symbolic', '0.0/0.0 MB/s');
+        this._cpuPanelLabel = cpu.label;
+        this._gpuPanelLabel = gpu.label;
+        this._ramPanelLabel = ram.label;
+        this._networkPanelLabel = network.label;
+        this._panelBox.add_child(cpu.box);
+        this._panelBox.add_child(gpu.box);
+        this._panelBox.add_child(ram.box);
+        this._panelBox.add_child(network.box);
+        this._indicator.add_child(this._panelBox);
 
         this._cpuMenuItem = new PopupMenu.PopupMenuItem('CPU: collecting…', {reactive: false});
         this._gpuMenuItem = new PopupMenu.PopupMenuItem(this._gpu.detail, {reactive: false});
         this._ramMenuItem = new PopupMenu.PopupMenuItem('RAM: collecting…', {reactive: false});
+        this._networkMenuItem = new PopupMenu.PopupMenuItem('Network: collecting…', {reactive: false});
         this._indicator.menu.addMenuItem(this._cpuMenuItem);
         this._indicator.menu.addMenuItem(this._gpuMenuItem);
         this._indicator.menu.addMenuItem(this._ramMenuItem);
+        this._indicator.menu.addMenuItem(this._networkMenuItem);
 
         Main.panel.addToStatusArea(this.uuid, this._indicator);
         this._refresh();
@@ -108,6 +187,28 @@ export default class ResourceMonitorExtension extends Extension {
         return Math.max(0, Math.min(100, Math.round((1 - idleDelta / totalDelta) * 100)));
     }
 
+    _readNetworkSpeed() {
+        const counters = readNetworkCounters();
+        const now = GLib.get_monotonic_time();
+        const previous = this._previousNetwork;
+        this._previousNetwork = counters ? {...counters, time: now} : null;
+
+        if (!counters || !previous || counters.interface !== previous.interface)
+            return {download: 0, upload: 0, interface: counters?.interface ?? 'unavailable'};
+
+        const elapsedSeconds = (now - previous.time) / 1_000_000;
+        if (elapsedSeconds <= 0)
+            return {download: 0, upload: 0, interface: counters.interface};
+
+        const receivedDelta = Math.max(0, counters.received - previous.received);
+        const sentDelta = Math.max(0, counters.sent - previous.sent);
+        return {
+            download: receivedDelta / elapsedSeconds / 1_000_000,
+            upload: sentDelta / elapsedSeconds / 1_000_000,
+            interface: counters.interface,
+        };
+    }
+
     _readSysfsGpu() {
         for (let card = 0; card < 8; card++) {
             const vendor = readText(`/sys/class/drm/card${card}/device/vendor`);
@@ -134,17 +235,19 @@ export default class ResourceMonitorExtension extends Extension {
             const used = Number(readText(`/sys/class/drm/card${card}/device/mem_info_vram_used`));
             const total = Number(readText(`/sys/class/drm/card${card}/device/mem_info_vram_total`));
             const memory = Number.isFinite(used) && Number.isFinite(total) && total > 0
-                ? ` · ${formatMemory(used / 1024)} / ${formatMemory(total / 1024)}`
+                ? ` · ${formatGpuMemory(used / 1024 / 1024, total / 1024 / 1024)} VRAM`
                 : '';
 
             return {
-                summary: `GPU ${utilization}%`,
-                detail: `GPU: ${utilization}%${memory} (Linux graphics driver)`,
+                summary: Number.isFinite(used) && Number.isFinite(total) && total > 0
+                    ? formatGpuMemory(used / 1024 / 1024, total / 1024 / 1024)
+                    : `${utilization}%`,
+                detail: `GPU utilization: ${utilization}%${memory} (Linux graphics driver)`,
             };
         }
 
         return {
-            summary: 'GPU n/a',
+            summary: 'n/a',
             detail: 'GPU metrics unavailable. Check that the graphics driver exposes utilization data.',
         };
     }
@@ -182,8 +285,8 @@ export default class ResourceMonitorExtension extends Extension {
                         const totalMemory = Number(total);
                         if ([usage, usedMemory, totalMemory].every(Number.isFinite)) {
                             this._gpu = {
-                                summary: `GPU ${Math.round(usage)}%`,
-                                detail: `GPU: ${name}, ${Math.round(usage)}% · ${Math.round(usedMemory)} / ${Math.round(totalMemory)} MiB VRAM`,
+                                summary: formatGpuMemory(usedMemory, totalMemory),
+                                detail: `GPU: ${name}, ${Math.round(usage)}% utilization · ${formatGpuMemory(usedMemory, totalMemory)} VRAM`,
                             };
                             this._updateLabels();
                             return;
@@ -205,6 +308,7 @@ export default class ResourceMonitorExtension extends Extension {
     _refresh() {
         this._cpu = this._readCpuUsage();
         this._memory = readMemory();
+        this._network = this._readNetworkSpeed();
         this._readGpu();
         this._updateLabels();
     }
@@ -213,16 +317,23 @@ export default class ResourceMonitorExtension extends Extension {
         const cpu = this._cpu;
         const memory = this._memory;
         const cpuText = cpu === null ? '--%' : `${cpu}%`;
-        const ramText = memory ? `${formatMemory(memory.used)} / ${formatMemory(memory.total)}` : 'unavailable';
+        const ramText = memory
+            ? formatRamMemory(memory.used, memory.total)
+            : 'unavailable';
         const ramPercent = memory ? Math.round(memory.used / memory.total * 100) : null;
+        const networkText = `${this._network.download.toFixed(1)}/${this._network.upload.toFixed(1)} MB/s`;
 
         if (!this._indicator)
             return;
 
-        this._panelLabel.text = `CPU ${cpuText}  ${this._gpu.summary}  RAM ${ramPercent === null ? '--%' : `${ramPercent}%`}`;
+        this._cpuPanelLabel.text = cpuText;
+        this._gpuPanelLabel.text = this._gpu.summary;
+        this._ramPanelLabel.text = memory ? ramText : '--/-- GB';
+        this._networkPanelLabel.text = networkText;
         this._cpuMenuItem.label.text = `CPU: ${cpuText}`;
         this._gpuMenuItem.label.text = this._gpu.detail;
-        this._ramMenuItem.label.text = `RAM: ${ramText}`;
+        this._ramMenuItem.label.text = `RAM: ${ramText}${ramPercent === null ? '' : ` (${ramPercent}%)`}`;
+        this._networkMenuItem.label.text = `Network: ${networkText} download/upload · ${this._network.interface}`;
     }
 
     disable() {
@@ -233,12 +344,19 @@ export default class ResourceMonitorExtension extends Extension {
 
         this._indicator?.destroy();
         this._indicator = null;
-        this._panelLabel = null;
+        this._panelBox = null;
+        this._cpuPanelLabel = null;
+        this._gpuPanelLabel = null;
+        this._ramPanelLabel = null;
+        this._networkPanelLabel = null;
         this._cpuMenuItem = null;
         this._gpuMenuItem = null;
         this._ramMenuItem = null;
+        this._networkMenuItem = null;
         this._previousCpu = null;
         this._cpu = null;
         this._memory = null;
+        this._previousNetwork = null;
+        this._network = null;
     }
 }
